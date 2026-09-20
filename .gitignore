@@ -164,3 +164,9 @@ cython_debug/
 
 # VSCode
 .vscode
+
+# local
+temp
+data
+output/TinyStoriesMerges.pkl
+output/TinyStoriesVocab.pkl

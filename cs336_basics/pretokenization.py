@@ -53,12 +53,13 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def pretokenize_chunk(input_path: str, bound: tuple[int, int], special_token: str) -> dict[str, int]:
+def pretokenize_chunk(input_path: str, bound: tuple[int, int], special_tokens: list[str]) -> dict[str, int]:
     pretoken: dict[str, int] = {}
     with open(input_path, "rb") as file:
         file.seek(bound[0])
         chunk = file.read(bound[1] - bound[0]).decode("utf-8", errors="ignore")
-        slice = chunk.split(special_token)
+        pattern = "|".join(re.escape(t) for t in special_tokens)
+        slice = re.split(pattern, chunk)
         for s in slice:
             for match in re.finditer(PAT, s):
                 word = match.group()
@@ -66,14 +67,14 @@ def pretokenize_chunk(input_path: str, bound: tuple[int, int], special_token: st
     return pretoken
 
 
-def pretokenize(input_path: str, special_token: str) -> dict[bytes, int]:
+def pretokenize(input_path: str, special_tokens: list[str]) -> dict[bytes, int]:
     pretoken_all: dict[bytes, int] = {}
     num_processes = 8
     with open(input_path, "rb") as file:
-        boundaries = find_chunk_boundaries(file, num_processes, special_token.encode())
+        boundaries = find_chunk_boundaries(file, num_processes, special_tokens[0].encode())
     bound = list(zip(boundaries[:-1], boundaries[1:]))
     with ProcessPoolExecutor() as executor:
-        results = list(executor.map(pretokenize_chunk, [input_path] * len(bound), bound, [special_token] * len(bound)))
+        results = list(executor.map(pretokenize_chunk, [input_path] * len(bound), bound, [special_tokens] * len(bound)))
 
     for res in results:
         for key, value in res.items():
@@ -86,5 +87,5 @@ if __name__ == "__main__":
     from pathlib import Path
 
     data_path = Path(__file__).resolve().parents[1] / "temp" / "one.txt"
-    x = pretokenize(data_path, "<|endoftext|>")
+    x = pretokenize(data_path, ["<|endoftext|>"])
     print(x)
