@@ -1,7 +1,8 @@
 import os
-from typing import BinaryIO
-import regex as re
 from concurrent.futures import ProcessPoolExecutor
+from typing import BinaryIO
+
+import regex as re  # pyright: ignore[reportMissingModuleSource]
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -72,10 +73,16 @@ def pretokenize(input_path: str, special_tokens: list[str]) -> dict[bytes, int]:
     num_processes = 8
     with open(input_path, "rb") as file:
         boundaries = find_chunk_boundaries(file, num_processes, special_tokens[0].encode())
-    bound = list(zip(boundaries[:-1], boundaries[1:]))
+    bound = list(zip(boundaries[:-1], boundaries[1:]))  # noqa: RUF007
+
+    results = []
+
     with ProcessPoolExecutor() as executor:
         results = list(executor.map(pretokenize_chunk, [input_path] * len(bound), bound, [special_tokens] * len(bound)))
-
+    """
+    for b in bound:
+        results.append(pretokenize_chunk(input_path, b, special_tokens))
+    """
     for res in results:
         for key, value in res.items():
             pretoken_all[key.encode("utf-8")] = pretoken_all.get(key.encode("utf-8"), 0) + value
