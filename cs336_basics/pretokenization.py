@@ -4,7 +4,7 @@ from typing import BinaryIO
 
 import regex as re  # pyright: ignore[reportMissingModuleSource]
 
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+from . import common
 
 
 def find_chunk_boundaries(
@@ -62,7 +62,7 @@ def pretokenize_chunk(input_path: str, bound: tuple[int, int], special_tokens: l
         pattern = "|".join(re.escape(t) for t in special_tokens)
         slice = re.split(pattern, chunk)
         for s in slice:
-            for match in re.finditer(PAT, s):
+            for match in re.finditer(common.PAT, s):
                 word = match.group()
                 pretoken[word] = pretoken.get(word, 0) + 1
     return pretoken
