@@ -8,8 +8,8 @@ from . import train_bpe
 if __name__ == "__main__":
     root_path = Path(__file__).resolve().parents[1]
     input_txt = root_path / "data" / "owt_train.txt"
-    output_vocab = root_path / "output" / "owt.pkl"
-    output_merges = root_path / "output" / "owt.pkl"
+    output_vocab = root_path / "output" / "OWTVocab.pkl"
+    output_merges = root_path / "output" / "OWTMerges.pkl"
 
     t0 = time.perf_counter()
     vocab, merges = train_bpe.train_bpe(input_txt, 32000, ["<|endoftext|>"])

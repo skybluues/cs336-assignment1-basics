@@ -170,3 +170,5 @@ temp
 data
 output/TinyStoriesMerges.pkl
 output/TinyStoriesVocab.pkl
+output/OWTMerges.pkl
+output/OWTVocab.pkl

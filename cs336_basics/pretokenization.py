@@ -1,6 +1,7 @@
 import os
 from concurrent.futures import ProcessPoolExecutor
 from typing import BinaryIO
+import time
 
 import regex as re  # pyright: ignore[reportMissingModuleSource]
 
@@ -69,6 +70,8 @@ def pretokenize_chunk(input_path: str, bound: tuple[int, int], special_tokens: l
 
 
 def pretokenize(input_path: str, special_tokens: list[str]) -> dict[bytes, int]:
+    t0 = time.perf_counter()
+
     pretoken_all: dict[bytes, int] = {}
     num_processes = 8
     with open(input_path, "rb") as file:
@@ -86,6 +89,9 @@ def pretokenize(input_path: str, special_tokens: list[str]) -> dict[bytes, int]:
     for res in results:
         for key, value in res.items():
             pretoken_all[key.encode("utf-8")] = pretoken_all.get(key.encode("utf-8"), 0) + value
+
+    duration = time.perf_counter() - t0
+    print(f"pretokenize duration: {duration:.3f}s")
 
     return pretoken_all
 

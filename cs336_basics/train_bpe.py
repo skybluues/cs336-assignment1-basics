@@ -1,171 +1,144 @@
+import heapq
 import os
 from pathlib import Path
+import time
 
 from . import pretokenization
 
 
-def init_vocab(special_tokens: list[str]) -> dict[int, bytes]:
-    vocab: dict[int, bytes] = {}
-    for n in range(256):
-        vocab[n] = bytes([n])
-    for i in range(len(special_tokens)):
-        vocab[i + 256] = special_tokens[i].encode()
-    return vocab
+class Rev:
+    __slots__ = ("x",)
+
+    def __init__(self, x):
+        self.x = x
+
+    def __lt__(self, other):
+        return self.x > other.x  # 原来更大的，在堆里反而更小
 
 
 def train_bpe(
     input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str]
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    vocab_map = init_vocab(special_tokens)
-    merge_list: list[tuple[bytes, bytes]] = []
 
-    """
-    1. create pre_tokens mapping count
-    2. create subtoken sequence to count
-    3. calculate the topest count of successive subtokens
-    4. update subtoken sequence counter
-    5. update topest counter
-    6. repeat 3 until reach max size
-    """
-    import time
+    vocab: dict[int, bytes] = {i: bytes([i]) for i in range(256)}
+    for i in range(len(special_tokens)):
+        vocab[i + 256] = special_tokens[i].encode()
+    merges: list[tuple[bytes, bytes]] = []
+
+    pretoken = pretokenization.pretokenize(input_path, special_tokens)
+    subword_ids: list[tuple[list[int], int]] = []  # [(subword1, count), (subword2, count)]
+    pairs: dict[tuple[int, int], tuple[int, set[int]]] = {}  # (token1, token2) -> (count, [index_of_subword_ids])
 
     t0 = time.perf_counter()
-    pretoken_map = pretokenization.pretokenize(input_path, special_tokens)
-    print(f"pretoken: {time.perf_counter() - t0}s")
-    subtokens_map: dict[tuple, int] = {}
-    for pretoken, count in pretoken_map.items():
-        subtokens = tuple(bytes([b]) for b in pretoken)
-        subtokens_map[subtokens] = count
 
-    pair_map: dict[tuple, int] = {}
-    for subtokens, count in subtokens_map.items():
-        if len(subtokens) < 2:
-            continue
-        for pair in zip(subtokens[:-1], subtokens[1:]):
-            pair_map[pair] = pair_map.get(pair, 0) + count
-    t0 = time.perf_counter()
-    while len(vocab_map) < vocab_size and len(pair_map) != 0:
-        """
-        find topest pair
-        """
-        topest_pair = max(pair_map.items(), key=lambda kv: (kv[1], kv[0]))
-        """
-        update vocab_map and merge_list
-        """
-        merge_list.append(topest_pair[0])
-        vocab_map[len(vocab_map)] = b"".join(topest_pair[0])
-        pair_map.pop(topest_pair[0])
-        """
-        update subtokens_map and pair_map
-        """
-        to_pop: list[tuple] = []
-        to_append: list[tuple[tuple, int]] = []
-        for subtokens, count in subtokens_map.items():
-            if len(subtokens) < 2:
-                to_pop.append(subtokens)
-                continue
-            to_merge: list[tuple[int, int]] = []
-            subtokens_new = []
-            i = 0
-            while i < len(subtokens) - 1:
-                if (subtokens[i], subtokens[i + 1]) == merge_list[-1]:
-                    subtokens_new.append(b"".join(merge_list[-1]))
-                    to_merge.append((i, i + 1))
-                    i += 2
+    for word_bytes, count in pretoken.items():
+        ids = [b for b in word_bytes]
+        subword_ids.append((ids, count))
+        for pair in zip(ids[:-1], ids[1:]):
+            if pair in pairs:
+                num, indexes = pairs[pair]
+                indexes.add(len(subword_ids) - 1)
+                pairs[pair] = (num + count, indexes)
+            else:
+                pairs[pair] = (count, {len(subword_ids) - 1})
+
+    heap: list[tuple[int, Rev, tuple[int, int]]] = []
+    for k, v in pairs.items():
+        heap.append((-v[0], Rev((vocab[k[0]], vocab[k[1]])), (k[0], k[1])))
+    heapq.heapify(heap)
+
+    while len(vocab) < vocab_size and len(pairs) != 0 and len(heap) > 0:
+        """ rebuild heap """
+        if len(heap) > len(pairs) * 20:
+            heap: list[tuple[int, Rev, tuple[int, int]]] = []
+            for k, v in pairs.items():
+                heap.append((-v[0], Rev((vocab[k[0]], vocab[k[1]])), (k[0], k[1])))
+            heapq.heapify(heap)
+
+        top = heapq.heappop(heap)
+        finished = False
+        while top[2] not in pairs or -top[0] != pairs[top[2]][0]:
+            if len(heap) > 0:
+                top = heapq.heappop(heap)
+            else:
+                finished = True
+                break
+        if finished:
+            break
+
+        pair = top[2]
+        index = pairs[pair][1]
+
+        merges.append((vocab[pair[0]], vocab[pair[1]]))
+        vocab[len(vocab)] = b"".join((vocab[pair[0]], vocab[pair[1]]))
+        pairs.pop(pair)
+
+        for i in index:
+            ids = subword_ids[i][0]
+            total = subword_ids[i][1]
+            new_ids = []
+            m = 0
+            while m < len(ids) - 1:
+                if (ids[m], ids[m + 1]) == pair:
+                    new_ids.append(len(vocab) - 1)
+
+                    if len(new_ids) > 1:
+                        key = (new_ids[-2], new_ids[-1])
+                        count, indexes = pairs.get(key, (0, set()))
+                        indexes.add(i)
+                        pairs[key] = (count + total, indexes)
+                        heapq.heappush(heap, (-(count + total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                        key = (ids[m - 1], ids[m])
+                        count, indexes = pairs.get(key, (0, set()))
+                        pairs[key] = (count - total, indexes)
+                        heapq.heappush(heap, (-(count - total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                        if count - total <= 0:
+                            pairs.pop(key)
+
+                    m += 2
                 else:
-                    subtokens_new.append(subtokens[i])
-                    i += 1
-            if i == len(subtokens) - 1:
-                subtokens_new.append(subtokens[-1])
-            if len(to_merge) > 0:
-                to_pop.append(subtokens)
-                to_append.append((tuple(subtokens_new), count))
-            for i in range(len(to_merge)):
-                if to_merge[i][1] < len(subtokens) - 1:
-                    if (
-                        subtokens[to_merge[i][1]],
-                        subtokens[to_merge[i][1] + 1],
-                    ) != topest_pair[0]:
-                        pair_map[(subtokens[to_merge[i][1]], subtokens[to_merge[i][1] + 1])] -= count
-                        if (
-                            pair_map[
-                                (
-                                    subtokens[to_merge[i][1]],
-                                    subtokens[to_merge[i][1] + 1],
-                                )
-                            ]
-                            <= 0
-                        ):
-                            pair_map.pop(
-                                (
-                                    subtokens[to_merge[i][1]],
-                                    subtokens[to_merge[i][1] + 1],
-                                )
-                            )
-                    if i < len(to_merge) - 1 and to_merge[i][1] + 1 == to_merge[i + 1][0]:
-                        pair_map[(b"".join(topest_pair[0]), b"".join(topest_pair[0]))] = (
-                            pair_map.get((b"".join(topest_pair[0]), b"".join(topest_pair[0])), 0) + count
-                        )
-                    else:
-                        pair_map[(b"".join(topest_pair[0]), subtokens[to_merge[i][1] + 1])] = (
-                            pair_map.get(
-                                (
-                                    b"".join(topest_pair[0]),
-                                    subtokens[to_merge[i][1] + 1],
-                                ),
-                                0,
-                            )
-                            + count
-                        )
+                    new_ids.append(ids[m])
 
-                if to_merge[i][0] > 0:
-                    if i > 0 and to_merge[i][0] - 1 == to_merge[i - 1][1]:
-                        pass
-                    else:
-                        if (
-                            subtokens[to_merge[i][0] - 1],
-                            subtokens[to_merge[i][0]],
-                        ) != topest_pair[0]:
-                            pair_map[
-                                (
-                                    subtokens[to_merge[i][0] - 1],
-                                    subtokens[to_merge[i][0]],
-                                )
-                            ] -= count
-                            if (
-                                pair_map[
-                                    (
-                                        subtokens[to_merge[i][0] - 1],
-                                        subtokens[to_merge[i][0]],
-                                    )
-                                ]
-                                <= 0
-                            ):
-                                pair_map.pop(
-                                    (
-                                        subtokens[to_merge[i][0] - 1],
-                                        subtokens[to_merge[i][0]],
-                                    )
-                                )
-                        pair_map[(subtokens[to_merge[i][0] - 1], b"".join(topest_pair[0]))] = (
-                            pair_map.get(
-                                (
-                                    subtokens[to_merge[i][0] - 1],
-                                    b"".join(topest_pair[0]),
-                                ),
-                                0,
-                            )
-                            + count
-                        )
+                    if len(new_ids) > 1 and new_ids[-2] == len(vocab) - 1:
+                        key = (new_ids[-2], new_ids[-1])
+                        count, indexes = pairs.get(key, (0, set()))
+                        indexes.add(i)
+                        pairs[key] = (count + total, indexes)
+                        heapq.heappush(heap, (-(count + total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                        key = (ids[m - 1], ids[m])
+                        count, indexes = pairs.get(key, (0, set()))
+                        pairs[key] = (count - total, indexes)
+                        heapq.heappush(heap, (-(count - total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                        if count - total <= 0:
+                            pairs.pop(key)
 
-        for x in to_pop:
-            subtokens_map.pop(x)
-        for x in to_append:
-            subtokens_map[x[0]] = subtokens_map.get(x[0], 0) + x[1]
-    print(f"merge: {time.perf_counter() - t0}s")
-    return vocab_map, merge_list
+                    m += 1
+            if m == len(ids) - 1:
+                new_ids.append(ids[-1])
 
+                if len(new_ids) > 1 and new_ids[-2] == len(vocab) - 1:
+                    key = (new_ids[-2], new_ids[-1])
+                    count, indexes = pairs.get(key, (0, set()))
+                    indexes.add(i)
+                    pairs[key] = (count + total, indexes)
+                    heapq.heappush(heap, (-(count + total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                    key = (ids[m - 1], ids[m])
+                    count, indexes = pairs.get(key, (0, set()))
+                    pairs[key] = (count - total, indexes)
+                    heapq.heappush(heap, (-(count - total), Rev((vocab[key[0]], vocab[key[1]])), key))
+                    if count - total <= 0:
+                        pairs.pop(key)
 
-if __name__ == "__main__":
-    data_path = Path(__file__).resolve().parents[1] / "temp" / "one.txt"
-    print(train_bpe(data_path, 500, ["<|endoftext|>"])[1])
+            subword_ids[i] = (new_ids, total)
+
+        """ prober """
+        if len(vocab) % 100 == 0:
+            print(f"vocab_size[{len(vocab)}] merges_size[{len(merges)}]", flush=True)
+            print(f"pairs_size[{len(pairs)}] heap_size[{len(heap)}]", flush=True)
+            print(f"time_spent[{time.perf_counter() - t0:.3f}s]", flush=True)
+            print("======", flush=True)
+
+    duration = time.perf_counter() - t0
+    print(f"train_bpe duration: {duration:.3f}s")
+
+    return vocab, merges
