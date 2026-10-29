@@ -172,3 +172,7 @@ output/TinyStoriesMerges.pkl
 output/TinyStoriesVocab.pkl
 output/OWTMerges.pkl
 output/OWTVocab.pkl
+output/owt_train.ids
+output/owt_valid.ids
+output/TinyStoriesV2-GPT4-train.ids
+output/TinyStoriesV2-GPT4-valid.ids

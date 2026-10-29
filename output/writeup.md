@@ -31,3 +31,13 @@ Pass all unit tests.
 (a) I trained byte-level BPE on OpenWebText with vocab_size=32000 and special token <|endoftext|>, and saved OWTVocab.pkl / OWTMerges.pkl. Training took about 52 minutes (pretok ~17 min, merges ~35 min) with peak main-process RSS ~14.6 GB. The longest token is 64 bytes of repeated \xc3\x83\xc3\x82 (mojibake-like), alongside long runs of - / —. This is reasonable for noisy web text: frequent repeated byte patterns are merged into long tokens.
 
 (b) Compared to TinyStories (10k vocab, ~47s, ~177MB, longest token b' accomplishment'), the OWT tokenizer has a larger vocabulary, needs much more time/memory, and its longest tokens are repetitive encoding/punctuation noise rather than English words. TinyStories tokens look like clean lexical units; OWT tokens reflect messy web data. So the two tokenizers encode different domain statistics, not just different sizes.
+
+**Problem(tokenizer_experiments): Experiments with tokenizers**
+
+(a) I sampled 10 documents from TinyStories and 10 from OpenWebText (split on <|endoftext|>). Encoding each sample with its matching tokenizer gave compression ratios of about 4.16 bytes/token for TinyStories (7552 UTF-8 bytes) and 4.70 bytes/token for OpenWebText (31604 UTF-8 bytes). The OWT tokenizer compresses slightly better, which is expected given its larger vocabulary (32k vs 10k) and more repetitive web-text patterns.
+
+(b) Encoding the same OpenWebText sample with the TinyStories tokenizer dropped the ratio to about 3.20 bytes/token, versus 4.70 with the OWT tokenizer. Compression gets worse because the TinyStories vocabulary is smaller and its merges were learned on children’s stories, so many web-text substrings are not covered by long merges and fall back to shorter pieces.
+
+(c) Timing a single encode of the combined samples with the OpenWebText tokenizer gave a throughput of about 5.7×10⁶ bytes/s. At that rate, tokenizing the Pile (825 GiB) would take roughly 1.55×10⁵ seconds ≈ 43 hours ≈ 1.8 days. This estimate is from a small sample and a single-process encode, so it is noisy.
+
+(d) uint16 is appropriate because both vocabularies are at most 32,000, which is less than 65536, so every ID fits in 16 bits while using half the storage of uint32.
